@@ -27,7 +27,7 @@ interface Message {
   timestamp: string;
 }
 
-const SpeakScreen = () => {
+const SpeakScreen = ({ navigation }: { navigation: { goBack: () => void } }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -37,9 +37,7 @@ const SpeakScreen = () => {
   const websocketRef = useRef<WebSocket | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
   const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  // ✅ 1. 재연결 시도 횟수를 세기 위한 Ref 추가
   const retryCountRef = useRef(0);
-  // ✅ 2. 사용자가 직접 종료했는지 상태를 추적
   const userClosedConnection = useRef(false);
 
   useEffect(() => {
@@ -58,10 +56,9 @@ const SpeakScreen = () => {
     setupUserAndInitialize();
 
     return () => {
-      // 컴포넌트가 사라질 때 모든 리소스 정리
       cleanupAudio();
       if (websocketRef.current) {
-        userClosedConnection.current = true; // 컴포넌트 unmount 시 사용자가 종료한 것으로 간주
+        userClosedConnection.current = true;
         websocketRef.current.close();
       }
     };
@@ -77,7 +74,7 @@ const SpeakScreen = () => {
     try {
       await requestPermissions();
       await setupTTS();
-      userClosedConnection.current = false; // 앱 초기화 시 재연결 허용
+      userClosedConnection.current = false;
       connectWebSocket();
     } catch (error) {
       Alert.alert("초기화 오류", "앱을 시작하는 데 문제가 발생했습니다.");
@@ -103,7 +100,6 @@ const SpeakScreen = () => {
   };
 
   const requestPermissions = async () => {
-    // ... (이전과 동일)
     if (Platform.OS === 'android') {
         try {
           const granted = await PermissionsAndroid.request(
@@ -130,23 +126,19 @@ const SpeakScreen = () => {
     if (!userId) return;
 
     // ❗️❗️ <서버 IP 주소> 부분은 실제 PC IP로 변경해주세요 ❗️❗️
-    const wsUrl = `ws://192.168.101.67:8888/ws/chat?user_id=${userId}`; // 포트 8888 사용
+    const wsUrl = `ws://192.168.101.67:8888/ws/chat?user_id=${userId}`;
     console.log(`🔗 WebSocket 연결 시도: ${wsUrl}`);
     websocketRef.current = new WebSocket(wsUrl);
 
     websocketRef.current.onopen = () => {
       setIsConnected(true);
       console.log('✅ WebSocket 연결 성공');
-      // ✅ 3. 연결 성공 시 재시도 횟수 초기화
       retryCountRef.current = 0;
     };
 
     websocketRef.current.onmessage = (event) => {
-      // ... (이전과 동일)
         try {
           const data = JSON.parse(event.data);
-          console.log('📨 받은 메시지:', data);
-
           if (data.type === 'ai_message') {
             handleAIMessage(data.content);
             setIsProcessing(false);
@@ -162,12 +154,10 @@ const SpeakScreen = () => {
         }
     };
 
-    // ✅ 4. 안정적인 재연결 로직으로 수정
     websocketRef.current.onclose = (event) => {
       setIsConnected(false);
       console.log('❌ WebSocket 연결 종료. Code:', event.code, 'Reason:', event.reason);
       
-      // 사용자가 직접 종료했거나, 컴포넌트가 사라진 경우에는 재연결 안 함
       if (userClosedConnection.current) {
         console.log('사용자가 연결을 종료하여 재연결하지 않습니다.');
         return;
@@ -190,7 +180,6 @@ const SpeakScreen = () => {
   };
 
   const startRecording = async () => {
-    // ... (이전과 동일)
     if (isSpeaking || isProcessing) return;
     try {
       const options = { sampleRate: 16000, channels: 1, bitsPerSample: 16, audioSource: 6, wavFile: 'voice_recording.wav' };
@@ -210,7 +199,6 @@ const SpeakScreen = () => {
   };
 
   const stopRecording = async () => {
-    // ... (이전과 동일)
     if (!isRecording) return;
     try {
       setIsRecording(false);
@@ -231,19 +219,16 @@ const SpeakScreen = () => {
   };
 
   const handleUserMessage = (message: string) => {
-    // ... (이전과 동일)
-     setMessages(prev => [...prev, { id: Date.now(), type: 'user', content: message, timestamp: new Date().toLocaleTimeString() }]);
+    setMessages(prev => [...prev, { id: Date.now(), type: 'user', content: message, timestamp: new Date().toLocaleTimeString() }]);
   };
 
   const handleAIMessage = (message: string) => {
-    // ... (이전과 동일)
     setMessages(prev => [...prev, { id: Date.now(), type: 'ai', content: message, timestamp: new Date().toLocaleTimeString() }]);
     speakMessage(message);
   };
 
   const speakMessage = async (message: string) => {
-    // ... (이전과 동일)
-     try {
+    try {
       await Tts.speak(message);
     } catch (error) {
       setIsSpeaking(false);
@@ -251,9 +236,8 @@ const SpeakScreen = () => {
   };
 
   const cleanupAudio = () => {
-    // ... (이전과 동일, async 제거)
     try {
-      AudioRecord.stop(); // isRecording 상태와 무관하게 일단 중지 시도
+      AudioRecord.stop();
       Tts.stop();
       if (recordingTimeoutRef.current) {
         clearTimeout(recordingTimeoutRef.current);
@@ -263,35 +247,15 @@ const SpeakScreen = () => {
     }
   };
 
-  // ✅ 5. 대화 종료 기능 수정
+  // ✅ '대화 종료' 기능 수정: Alert 없이 바로 실행
   const handleEndConversation = () => {
-    Alert.alert(
-      '대화 종료',
-      '대화를 종료하고 세션을 정리하시겠습니까?',
-      [
-        { text: '취소', style: 'cancel' },
-        {
-          text: '종료',
-          style: 'destructive',
-          onPress: () => {
-            console.log('--- 대화 세션 종료 ---');
-            // 모든 오디오/녹음 중지
-            cleanupAudio(); 
-            // 웹소켓 연결 종료 (재연결 안 하도록 플래그 설정)
-            userClosedConnection.current = true;
-            websocketRef.current?.close(); 
-            // 상태 초기화
-            setIsRecording(false);
-            setIsSpeaking(false);
-            setIsProcessing(false);
-            setMessages([]); // 메시지 목록 비우기
-          }
-        }
-      ]
-    );
+    console.log('--- 대화 세션 종료 ---');
+    cleanupAudio(); 
+    userClosedConnection.current = true;
+    websocketRef.current?.close(); 
+    navigation.goBack(); 
   };
   
-  // getStatusText, getStatusColor, JSX, styles는 이전과 동일
   const getStatusText = () => {
     if (isSpeaking) return '🔊 AI 말하는 중...';
     if (isProcessing) return '⚙️ 음성 처리 중...';
@@ -365,7 +329,6 @@ const SpeakScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  // ... (이전과 동일)
   container: { flex: 1, backgroundColor: '#f5f5f5', paddingTop: 50, },
   header: { padding: 20, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee', },
   title: { fontSize: 24, fontWeight: 'bold', color: '#333', marginBottom: 10, },
