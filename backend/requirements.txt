@@ -1,6 +1,11 @@
 fastapi
 uvicorn
 python-dotenv
+pinecone
+uuid
+sqlalchemy
+pymysql
+cryptography
 
 # 호환성이 검증된 안정 버전
 openai==1.17.0

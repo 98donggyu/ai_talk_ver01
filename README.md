@@ -10,3 +10,8 @@ docker-compose up --build
 ```
 npx react-native run-android
 ```
+
+# localhost port 8000 연결
+```
+adb reverse tcp:8000 tcp:8000
+```
