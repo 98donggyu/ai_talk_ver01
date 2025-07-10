@@ -11,8 +11,8 @@ const HomeScreen = ({ navigation }: { navigation: any }) => {
   const menuItems: MenuItem[] = [
     { id: 1, name: '말하기', image: require('../images/speak.png'), screen: 'Speak' },
     { id: 2, name: '가족 마당', image: require('../images/family.png') },
-    { id: 3, name: '라디오', image: require('../images/radio.png') },
-    { id: 4, name: '놀이', image: require('../images/play.png'), screen: 'Play' }, // 'Play' 스크린으로 연결
+    { id: 3, name: '라디오', image: require('../images/radio.png'), screen: 'Radio' }, // 'Radio' 스크린으로 연결
+    { id: 4, name: '놀이', image: require('../images/play.png'), screen: 'Play' },
     { id: 5, name: '건강', image: require('../images/health.png'), screen: 'Health' },
     { id: 6, name: '사진', image: require('../images/photo.png') },
   ];
