@@ -6,6 +6,7 @@ uuid
 sqlalchemy
 pymysql
 cryptography
+mysql-connector-python
 
 # 호환성이 검증된 안정 버전
 openai==1.17.0

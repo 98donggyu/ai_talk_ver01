@@ -1,5 +1,3 @@
-# app/config.py
-
 import os
 from dotenv import load_dotenv
 
@@ -22,3 +20,11 @@ DB_NAME = "ai_talk_db"
 # 데이터베이스 연결 URL 생성
 DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}?charset=utf8mb4"
 SERVER_DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}?charset=utf8mb4"
+
+# 보고서 생성 스크립트가 사용할 DB 접속 정보 묶음
+DB_CONFIG = {
+    'host': DB_HOST,
+    'user': DB_USER,
+    'password': DB_PASSWORD,
+    'database': DB_NAME
+}

@@ -10,14 +10,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # 분리된 모듈들에서 필요한 함수와 객체들을 import
 from . import config
-from .database import save_conversation_to_mysql, create_hourly_summary_report
+from .database import save_conversation_to_mysql
 from .ai_services import get_transcript_from_audio, get_ai_chat_completion
 from .vector_db import create_memory_for_pinecone, search_memories
 from .websocket_manager import manager, session_conversations
 
-# prompts.json 파일 로드
+# talk_prompts.json 파일 로드
 try:
-    with open('prompts.json', 'r', encoding='utf-8') as f:
+    with open('talk_prompts.json', 'r', encoding='utf-8') as f:
         PROMPTS_CONFIG = json.load(f)['main_chat_prompt']
     print("✅ prompts.json 파일을 성공적으로 불러왔습니다.")
 except FileNotFoundError:

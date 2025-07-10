@@ -1,20 +1,19 @@
-# app/database.py
-
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime, timedelta, timezone # timezone 추가
+from datetime import date, datetime, timedelta
+import json
 import asyncio
 
 from . import config
-from .ai_services import get_ai_chat_completion
 
-# SQLAlchemy 엔진 및 세션 설정 (이전과 동일)
+# SQLAlchemy 엔진 및 세션 설정
 engine = None
 
 def init_db():
     """서버 시작 시 데이터베이스와 테이블을 확인하고 생성합니다."""
     global engine
     try:
+        # DB가 없으면 생성
         server_engine = create_engine(config.SERVER_DATABASE_URL)
         with server_engine.connect() as connection:
             connection.execute(text(f"CREATE DATABASE IF NOT EXISTS {config.DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"))
@@ -23,25 +22,27 @@ def init_db():
         with engine.connect() as connection:
             print("'conversations'와 'summaries' 테이블 확인 및 생성 시도...")
             
-            # ✅ [수정] conversations 테이블 생성 완전한 구문
+            # conversations 테이블 구조 수정 (speaker 컬럼 추가)
             connection.execute(text("""
             CREATE TABLE IF NOT EXISTS conversations (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id VARCHAR(255) NOT NULL,
-                user_message TEXT NOT NULL,
-                ai_message TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                speaker VARCHAR(50) NOT NULL, -- 'user' 또는 'ai'
+                message TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                INDEX (user_id, created_at)
             );
             """))
 
-            # ✅ [수정] summaries 테이블 생성 완전한 구문
+            # summaries 테이블 구조 개선 (report_date, summary_json 추가)
             connection.execute(text("""
             CREATE TABLE IF NOT EXISTS summaries (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id VARCHAR(255) NOT NULL,
-                summary_text TEXT NOT NULL,
+                report_date DATE NOT NULL,
+                summary_json JSON NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                INDEX (user_id)
+                UNIQUE KEY (user_id, report_date) -- 사용자는 하루에 하나의 리포트만 가짐
             );
             """))
             print("-> 테이블 준비 완료.")
@@ -49,6 +50,22 @@ def init_db():
         print("✅ MySQL 데이터베이스 및 테이블이 성공적으로 준비되었습니다.")
         return True
     except Exception as e:
+        # JSON 타입이 지원되지 않는 구버전 MySQL일 경우 TEXT로 대체 시도
+        if "1064" in str(e) and "JSON" in str(e).upper():
+            with engine.connect() as connection:
+                print("⚠️ JSON 타입 미지원. TEXT 타입으로 summaries 테이블을 다시 생성합니다.")
+                connection.execute(text("""
+                CREATE TABLE IF NOT EXISTS summaries (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id VARCHAR(255) NOT NULL,
+                    report_date DATE NOT NULL,
+                    summary_json TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE KEY (user_id, report_date)
+                );
+                """))
+                print("-> TEXT 타입으로 테이블 준비 완료.")
+            return True
         print(f"❌ 데이터베이스 설정 중 오류 발생: {e}")
         return False
 
@@ -60,67 +77,72 @@ else:
 
 
 async def save_conversation_to_mysql(user_id: str, user_message: str, ai_message: str):
-    # ... (이전과 동일한 코드)
+    """실시간 대화를 DB에 저장하는 함수 (구조 변경에 맞춰 수정)"""
     db = SessionLocal()
     try:
-        query = text("INSERT INTO conversations (user_id, user_message, ai_message) VALUES (:user_id, :user_message, :ai_message)")
-        await asyncio.to_thread(db.execute, query, {"user_id": user_id, "user_message": user_message, "ai_message": ai_message})
+        # 사용자 대화 저장
+        user_query = text("INSERT INTO conversations (user_id, speaker, message) VALUES (:user_id, 'user', :message)")
+        await asyncio.to_thread(db.execute, user_query, {"user_id": user_id, "message": user_message})
+        
+        # AI 대화 저장
+        ai_query = text("INSERT INTO conversations (user_id, speaker, message) VALUES (:user_id, 'ai', :message)")
+        await asyncio.to_thread(db.execute, ai_query, {"user_id": user_id, "message": ai_message})
+
         await asyncio.to_thread(db.commit)
     finally:
         db.close()
 
 
-# ✅ [수정] create_hourly_summary_report 함수 전체를 아래 내용으로 교체
-async def create_hourly_summary_report(user_id: str):
-    """
-    한국 시간(KST) 17시에 새로운 대화가 있을 경우,
-    하루 한 번 리포트를 생성합니다.
-    """
-    print(f"🗓️ [{user_id}] 님의 일일 리포트 생성 여부를 확인합니다.")
-    
-    # 1. 한국 시간대(KST, UTC+9)를 정의합니다.
-    KST = timezone(timedelta(hours=9))
-    now_kst = datetime.now(KST)
-    
-    # 2. 지금이 17시가 아니면, 함수를 즉시 종료합니다.
-    if now_kst.hour != 17:
-        print(f"-> 현재 시간({now_kst.hour}시)이 17시가 아니므로 리포트를 생성하지 않습니다.")
-        return
-
+def fetch_daily_conversations(user_id: str, target_date: date) -> str:
+    """특정 사용자의 하루치 대화 내용을 DB에서 가져오는 함수"""
     db = SessionLocal()
     try:
-        # 3. 오늘 17시 이전에 이미 리포트가 생성되었는지 확인합니다.
-        today_report_time_kst = now_kst.replace(hour=17, minute=0, second=0, microsecond=0)
+        query = text("""
+            SELECT speaker, message FROM conversations
+            WHERE user_id = :user_id AND DATE(created_at) = :target_date
+            ORDER BY created_at ASC
+        """)
+        results = db.execute(query, {"user_id": user_id, "target_date": target_date}).fetchall()
         
-        last_summary_query = text("SELECT created_at FROM summaries WHERE user_id = :user_id ORDER BY created_at DESC LIMIT 1")
-        last_summary_time = db.execute(last_summary_query, {"user_id": user_id}).scalar_one_or_none()
+        if not results:
+            return ""
+            
+        # 대화 기록을 "speaker: message" 형식으로 조합
+        formatted_text = "\n".join([f"{speaker}: {message}" for speaker, message in results])
+        return formatted_text
+    finally:
+        db.close()
 
-        if last_summary_time:
-            # DB 시간(UTC)을 한국 시간(KST)으로 변환하여 비교
-            last_summary_time_kst = last_summary_time.astimezone(KST)
-            if last_summary_time_kst >= today_report_time_kst:
-                print(f"-> 오늘 17시 리포트는 이미 생성되었습니다. (마지막 리포트: {last_summary_time_kst.strftime('%H:%M')})")
-                return
-
-        # 4. 리포트에 포함할 새로운 대화 내용을 가져옵니다.
-        start_time = last_summary_time or datetime.min
-        new_conv_query = text("SELECT user_message, ai_message FROM conversations WHERE user_id = :user_id AND created_at > :start_time")
-        new_conversations = db.execute(new_conv_query, {"user_id": user_id, "start_time": start_time}).fetchall()
-
-        if not new_conversations:
-            print("-> 리포트에 추가할 새로운 대화 내용이 없습니다.")
-            return
-
-        print(f"-> 새로운 대화 {len(new_conversations)}건을 바탕으로 일일 리포트를 생성합니다.")
-        conversation_history = "\n".join([f"사용자: {row[0]}\nAI: {row[1]}" for row in new_conversations])
-        report_prompt = f"다음은 사용자의 최근 대화 내용입니다. 이 내용을 바탕으로 사용자의 상태와 주요 대화 내용을 요약하는 '일일 리포트'를 작성해주세요.\n\n--- 대화 내용 ---\n{conversation_history}\n-----------------\n\n일일 리포트:"
+def save_summary_to_db(user_id: str, report_date: date, summary_json: dict):
+    """분석된 보고서를 summaries 테이블에 저장하는 함수"""
+    db = SessionLocal()
+    try:
+        # JSON 객체를 문자열로 변환하여 저장
+        summary_text = json.dumps(summary_json, ensure_ascii=False)
         
-        report_text = await get_ai_chat_completion(report_prompt)
+        query = text("""
+            INSERT INTO summaries (user_id, report_date, summary_json)
+            VALUES (:user_id, :report_date, :summary_json)
+            ON DUPLICATE KEY UPDATE summary_json = VALUES(summary_json)
+        """)
         
-        summary_save_query = text("INSERT INTO summaries (user_id, summary_text) VALUES (:user_id, :summary_text)")
-        db.execute(summary_save_query, {"user_id": user_id, "summary_text": report_text})
+        db.execute(query, {"user_id": user_id, "report_date": report_date, "summary_json": summary_text})
         db.commit()
-        print(f"✅ [{user_id}] 님의 일일 리포트가 MySQL summaries 테이블에 저장되었습니다.")
+        print(f"성공: 사용자 {user_id}의 {report_date} 보고서가 저장되었습니다.")
+    finally:
+        db.close()
 
+def get_all_user_ids_for_yesterday() -> list[str]:
+    """어제 대화가 있었던 모든 사용자 ID 목록을 가져오는 함수"""
+    db = SessionLocal()
+    try:
+        yesterday = date.today() - timedelta(days=1)
+        query = text("""
+            SELECT DISTINCT user_id FROM conversations
+            WHERE DATE(created_at) = :yesterday
+        """)
+        results = db.execute(query, {"yesterday": yesterday}).fetchall()
+        user_ids = [item[0] for item in results]
+        return user_ids
     finally:
         db.close()
